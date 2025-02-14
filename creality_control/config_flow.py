@@ -1,64 +1,50 @@
-import voluptuous as vol
+import logging
 from homeassistant import config_entries
-import homeassistant.helpers.config_validation as cv
-from aiohttp import ClientSession, ClientError
-import async_timeout
-from Crypto.Cipher import DES
-from Crypto.Util.Padding import pad
-from base64 import b64encode
-from binascii import unhexlify
-from .const import DOMAIN
+from homeassistant.const import CONF_HOST, CONF_PORT, CONF_PASSWORD
+import voluptuous as vol
 
+_LOGGER = logging.getLogger(__name__)
 
-class CrealityControlConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class CrealityControlConfigFlow(config_entries.ConfigFlow, domain="creality_control"):
     """Handle a config flow for Creality Control."""
-    VERSION = 1
+    
+    def __init__(self):
+        _LOGGER.debug("Initializing config flow for Creality Control.")
+        self._host = None
+        self._port = None
+        self._password = None
 
     async def async_step_user(self, user_input=None):
-        """Handle the initial step."""
-        errors = {}
+        _LOGGER.debug("Entering async_step_user.")
 
         if user_input is not None:
-            valid = await self._test_connection(
-                user_input["host"], user_input["port"], user_input["password"]
-            )
-            if valid:
-                return self.async_create_entry(title="Creality Control", data=user_input)
-            else:
-                errors["base"] = "cannot_connect" if valid is None else "invalid_password"
+            self._host = user_input.get(CONF_HOST)
+            self._port = user_input.get(CONF_PORT)
+            self._password = user_input.get(CONF_PASSWORD)
+            _LOGGER.debug(f"User input received: Host={self._host}, Port={self._port}, Password={self._password}")
 
+            # Validate the host and port
+            if not self._host or not self._port:
+                _LOGGER.error("Host and Port are required")
+                return self.async_abort(reason="missing_required_fields")
+
+            # Successfully received user input, create the entry
+            return self.async_create_entry(
+                title="Creality Control",
+                data={CONF_HOST: self._host, CONF_PORT: self._port, CONF_PASSWORD: self._password or ""},
+            )
+        
+        # If no user input, show the form
         return self.async_show_form(
-            step_id="user",
+            step_id="user", 
             data_schema=vol.Schema({
-                vol.Required("host"): cv.string,
-                vol.Required("port", default=18188): cv.port,
-                vol.Required("password"): cv.string,
-            }),
-            errors=errors,
+                vol.Required(CONF_HOST): str,
+                vol.Required(CONF_PORT, default=18188): int,
+                vol.Optional(CONF_PASSWORD, default=""): str  # Make the password optional
+            })
         )
 
-    async def _test_connection(self, host, port, password):
-        """Test connection to the Creality printer."""
-        uri = f"ws://{host}:{port}/"
-        token = self.generate_token(password)
-        try:
-            async with ClientSession() as session:
-                async with session.ws_connect(uri) as ws:
-                    await ws.send_json({"cmd": "GET_PRINT_STATUS", "token": token})
-                    async with async_timeout.timeout(10):
-                        response = await ws.receive_json()
-                        if "printStatus" in response and response["printStatus"] == "TOKEN_ERROR":
-                            return False  # Token is invalid
-                        return True  # Assuming any response with printStatus not TOKEN_ERROR is valid
-        except Exception as e:
-            return None  # Unable to connect
-        return None  # In case the connection could not be established or an unexpected error occurred
-
-    def generate_token(self, password):
-        """Generate a token based on the password."""
-        key = unhexlify("6138356539643638")
-        cipher = DES.new(key[:8], DES.MODE_ECB)
-        padded_password = pad(password.encode(), DES.block_size)
-        encrypted_password = cipher.encrypt(padded_password)
-        token = b64encode(encrypted_password).decode('utf-8')
-        return token
+    async def async_step_import(self, import_config):
+        """Handle import of configuration via YAML."""
+        _LOGGER.debug("Import step triggered with config: %s", import_config)
+        return await self.async_step_user(import_config)
